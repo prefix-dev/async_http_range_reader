@@ -109,35 +109,57 @@ impl AsyncHttpRangeReader {
     ) -> Result<(Self, HeaderMap), AsyncHttpRangeReaderError> {
         match check_method {
             CheckSupportMethod::NegativeRangeRequest(initial_chunk_size) => {
-                Self::new_tail_request(client, url, initial_chunk_size).await
+                let response = Self::initial_tail_request(
+                    client.clone(),
+                    url.clone(),
+                    initial_chunk_size,
+                    HeaderMap::default(),
+                )
+                .await?;
+                let response_headers = response.headers().clone();
+                let self_ = Self::new_tail_response(client, url, response).await?;
+                Ok((self_, response_headers))
             }
-            CheckSupportMethod::Head => Self::new_head(client, url).await,
+            CheckSupportMethod::Head => {
+                let response =
+                    Self::new_head_request(client.clone(), url.clone(), HeaderMap::default())
+                        .await?;
+                let response_headers = response.headers().clone();
+                let self_ = Self::new_head_response(client, url, response).await?;
+                Ok((self_, response_headers))
+            }
         }
     }
 
     /// An initial range request is performed to the server to determine if the remote accepts range
     /// requests. This will return a number of bytes from the end of the stream. Use the
-    /// `initial_chunk_size` paramter to define how many bytes should be requested from the end.
-    pub async fn new_tail_request(
+    /// `initial_chunk_size` parameter to define how many bytes should be requested from the end.
+    pub async fn initial_tail_request(
         client: reqwest::Client,
         url: reqwest::Url,
         initial_chunk_size: u64,
-    ) -> Result<(Self, HeaderMap), AsyncHttpRangeReaderError> {
-        // Perform an initial range request to get the size of the file
-        let tail_request_response = client
-            .get(url.clone())
+        extra_headers: HeaderMap,
+    ) -> Result<Response, AsyncHttpRangeReaderError> {
+        let tail_response = client
+            .get(url)
             .header(
                 reqwest::header::RANGE,
                 format!("bytes=-{initial_chunk_size}"),
             )
-            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .headers(extra_headers)
             .send()
             .await
             .and_then(Response::error_for_status)
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::HttpError)?;
-        let response_header = tail_request_response.headers().clone();
+        Ok(tail_response)
+    }
 
+    pub async fn new_tail_response(
+        client: reqwest::Client,
+        url: reqwest::Url,
+        tail_request_response: Response,
+    ) -> Result<Self, AsyncHttpRangeReaderError> {
         // Get the size of the file from this initial request
         let content_range = ContentRange::parse(
             tail_request_response
@@ -204,23 +226,31 @@ impl AsyncHttpRangeReader {
                 poll_request_tx: None,
             }),
         };
-        Ok((reader, response_header))
+        Ok(reader)
     }
 
-    async fn new_head(
+    pub async fn new_head_request(
         client: reqwest::Client,
         url: reqwest::Url,
-    ) -> Result<(Self, HeaderMap), AsyncHttpRangeReaderError> {
+        extra_headers: HeaderMap,
+    ) -> Result<Response, AsyncHttpRangeReaderError> {
         // Perform a HEAD request to get the content-length.
         let head_response = client
             .head(url.clone())
-            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .headers(extra_headers)
             .send()
             .await
             .and_then(Response::error_for_status)
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::HttpError)?;
+        Ok(head_response)
+    }
 
+    pub async fn new_head_response(
+        client: reqwest::Client,
+        url: reqwest::Url,
+        head_response: Response,
+    ) -> Result<Self, AsyncHttpRangeReaderError> {
         // Are range requests supported?
         if head_response
             .headers()
@@ -279,7 +309,7 @@ impl AsyncHttpRangeReader {
                 poll_request_tx: None,
             }),
         };
-        Ok((reader, head_response.headers().clone()))
+        Ok(reader)
     }
 
     /// Returns the ranges that this instance actually performed HTTP requests for.
@@ -378,7 +408,6 @@ async fn run_streamer(
             let response = match client
                 .get(url.clone())
                 .header(reqwest::header::RANGE, range_string)
-                .header(reqwest::header::CACHE_CONTROL, "no-cache")
                 .send()
                 .instrument(span)
                 .await
