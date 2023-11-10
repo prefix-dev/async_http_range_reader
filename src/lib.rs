@@ -49,6 +49,36 @@ pub use error::AsyncHttpRangeReaderError;
 /// An `AsyncRangeReader` enables reading from a file over HTTP using range requests.
 ///
 /// See the [`crate`] level documentation for more information.
+///
+/// The general entrypoint is [`AsyncHttpRangeReader::new`]. Depending on the
+/// [`CheckSupportMethod`], this will either call [`AsyncHttpRangeReader::initial_tail_request`] or
+/// [`AsyncHttpRangeReader::initial_head_request`] to send the initial request and then
+/// [`AsyncHttpRangeReader::from_tail_response`] or [`AsyncHttpRangeReader::from_head_response`] to
+/// initialize the async reader. If you want to apply a caching layer, you can send the initial head
+/// (or tail) request yourself with your cache headers (e.g. through the
+/// [http-cache-semantics](https://docs.rs/http-cache-semantics) crate):
+///
+/// ```rust
+/// # use url::Url;
+/// # use async_http_range_reader::{AsyncHttpRangeReader, AsyncHttpRangeReaderError};
+/// async fn get_reader_cached(
+///     url: Url,
+/// ) -> Result<Option<AsyncHttpRangeReader>, AsyncHttpRangeReaderError> {
+///     let etag = "63c550e8-5ae";
+///     let client = reqwest::Client::new();
+///     let response = client
+///         .head(url.clone())
+///         .header(reqwest::header::IF_NONE_MATCH, etag)
+///         .send()
+///         .await?;
+///     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+///         Ok(None)
+///     } else {
+///         let reader = AsyncHttpRangeReader::from_head_response(client, response).await?;
+///         Ok(Some(reader))
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct AsyncHttpRangeReader {
     inner: Mutex<Inner>,
@@ -89,14 +119,17 @@ struct Inner {
     poll_request_tx: Option<PollSender<Range<u64>>>,
 }
 
+/// For the initial request, we support either directly requesting N bytes from the end for file
+/// or, if you the server doesn't support negative byte offsets, starting with a HEAD request
+/// instead
 pub enum CheckSupportMethod {
-    // Perform a range request with a negative byte range. This will return the N bytes from the
-    // *end* of the file as well as the file-size. This is especially useful to also immediately
-    // get some bytes from the end of the file.
+    /// Perform a range request with a negative byte range. This will return the N bytes from the
+    /// *end* of the file as well as the file-size. This is especially useful to also immediately
+    /// get some bytes from the end of the file.
     NegativeRangeRequest(u64),
 
-    // Perform a head request to get the length of the file and check if the server supports range
-    // requests.
+    /// Perform a head request to get the length of the file and check if the server supports range
+    /// requests.
     Head,
 }
 
@@ -117,21 +150,21 @@ impl AsyncHttpRangeReader {
                 )
                 .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::new_tail_response(client, url, response).await?;
+                let self_ = Self::from_tail_response(client, response).await?;
                 Ok((self_, response_headers))
             }
             CheckSupportMethod::Head => {
                 let response =
-                    Self::new_head_request(client.clone(), url.clone(), HeaderMap::default())
+                    Self::initial_head_request(client.clone(), url.clone(), HeaderMap::default())
                         .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::new_head_response(client, url, response).await?;
+                let self_ = Self::from_head_response(client, response).await?;
                 Ok((self_, response_headers))
             }
         }
     }
 
-    /// An initial range request is performed to the server to determine if the remote accepts range
+    /// Send an initial range request to determine if the remote accepts range
     /// requests. This will return a number of bytes from the end of the stream. Use the
     /// `initial_chunk_size` parameter to define how many bytes should be requested from the end.
     pub async fn initial_tail_request(
@@ -155,9 +188,10 @@ impl AsyncHttpRangeReader {
         Ok(tail_response)
     }
 
-    pub async fn new_tail_response(
+    /// Initialize the reader from [`AsyncHttpRangeReader::initial_tail_request`] (or a user
+    /// provided response that also has a range of bytes from the end as body)
+    pub async fn from_tail_response(
         client: reqwest::Client,
-        url: reqwest::Url,
         tail_request_response: Response,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
         // Get the size of the file from this initial request
@@ -201,7 +235,7 @@ impl AsyncHttpRangeReader {
         let (state_tx, state_rx) = watch::channel(StreamerState::default());
         tokio::spawn(run_streamer(
             client,
-            url,
+            tail_request_response.url().clone(),
             Some((tail_request_response, start)),
             memory_map,
             state_tx,
@@ -229,7 +263,9 @@ impl AsyncHttpRangeReader {
         Ok(reader)
     }
 
-    pub async fn new_head_request(
+    /// Send an initial range request to determine if the remote accepts range
+    /// requests and get the content length
+    pub async fn initial_head_request(
         client: reqwest::Client,
         url: reqwest::Url,
         extra_headers: HeaderMap,
@@ -246,9 +282,10 @@ impl AsyncHttpRangeReader {
         Ok(head_response)
     }
 
-    pub async fn new_head_response(
+    /// Initialize the reader from [`AsyncHttpRangeReader::initial_head_request`] (or a user
+    /// provided response the)
+    pub async fn from_head_response(
         client: reqwest::Client,
-        url: reqwest::Url,
         head_response: Response,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
         // Are range requests supported?
@@ -291,7 +328,12 @@ impl AsyncHttpRangeReader {
         let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
         let (state_tx, state_rx) = watch::channel(StreamerState::default());
         tokio::spawn(run_streamer(
-            client, url, None, memory_map, state_tx, request_rx,
+            client,
+            head_response.url().clone(),
+            None,
+            memory_map,
+            state_tx,
+            request_rx,
         ));
 
         // Configure the initial state of the streamer.
