@@ -5,7 +5,7 @@ version = "0.5.0"
 edition = "2021"
 description = "A library for streaming reading of files over HTTP using range requests"
 license = "MIT"
-repository = "https://github.com/baszalmstra/async_http_range_reader"
+repository = "https://github.com/prefix-dev/async_http_range_reader"
 exclude = ["test-data/*"]
 
 [dependencies]
