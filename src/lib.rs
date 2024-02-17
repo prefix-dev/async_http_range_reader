@@ -475,6 +475,14 @@ async fn run_streamer(
                 Ok(response) => response,
             };
 
+            // If the server returns a successful, but non-206 response (e.g., 200), then it
+            // doesn't support range requests (even if the `Accept-Ranges` header is set).
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                state.error = Some(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported);
+                let _ = state_tx.send(state);
+                break 'outer;
+            }
+
             if !stream_response(
                 response,
                 *range.start(),
