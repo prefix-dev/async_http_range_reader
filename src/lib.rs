@@ -58,6 +58,7 @@ pub use error::AsyncHttpRangeReaderError;
 /// ```rust
 /// # use url::Url;
 /// # use async_http_range_reader::{AsyncHttpRangeReader, AsyncHttpRangeReaderError};
+/// # use reqwest::header::HeaderMap;
 /// async fn get_reader_cached(
 ///     url: Url,
 /// ) -> Result<Option<AsyncHttpRangeReader>, AsyncHttpRangeReaderError> {
@@ -687,6 +688,7 @@ mod test {
             Client::new(),
             server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap(),
             check_method,
+            HeaderMap::default(),
         )
         .await
         .expect("Could not download range - did you run `git lfs pull`?");
@@ -781,6 +783,7 @@ mod test {
             Client::new(),
             server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap(),
             check_method,
+            HeaderMap::default(),
         )
         .await
         .expect("bla");
@@ -822,6 +825,7 @@ mod test {
             Client::new(),
             server.url().join("not-found").unwrap(),
             CheckSupportMethod::Head,
+            HeaderMap::default(),
         )
         .await
         .expect_err("expected an error");
