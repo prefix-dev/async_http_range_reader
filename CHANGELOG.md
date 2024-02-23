@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/prefix-dev/async_http_range_reader/compare/v0.6.1...v0.7.0) - 2024-02-23
+
+### Added
+- lint pr titles for better changelogs ([#7](https://github.com/prefix-dev/async_http_range_reader/pull/7))
+
+### Fixed
+- tests
+
+### Other
+- Allow extra headers to be attached to requests ([#9](https://github.com/prefix-dev/async_http_range_reader/pull/9))
+
 ## [0.6.1](https://github.com/prefix-dev/async_http_range_reader/compare/v0.6.0...v0.6.1) - 2024-02-17
 
 ### Added
