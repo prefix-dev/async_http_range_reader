@@ -71,7 +71,7 @@ pub use error::AsyncHttpRangeReaderError;
 ///     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
 ///         Ok(None)
 ///     } else {
-///         let reader = AsyncHttpRangeReader::from_head_response(client, response).await?;
+///         let reader = AsyncHttpRangeReader::from_head_response(client, response, HeaderMap::default()).await?;
 ///         Ok(Some(reader))
 ///     }
 /// }
@@ -142,6 +142,7 @@ impl AsyncHttpRangeReader {
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         url: reqwest::Url,
         check_method: CheckSupportMethod,
+        extra_headers: HeaderMap,
     ) -> Result<(Self, HeaderMap), AsyncHttpRangeReaderError> {
         let client = client.into();
         match check_method {
@@ -154,7 +155,7 @@ impl AsyncHttpRangeReader {
                 )
                 .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::from_tail_response(client, response).await?;
+                let self_ = Self::from_tail_response(client, response, extra_headers).await?;
                 Ok((self_, response_headers))
             }
             CheckSupportMethod::Head => {
@@ -162,7 +163,7 @@ impl AsyncHttpRangeReader {
                     Self::initial_head_request(client.clone(), url.clone(), HeaderMap::default())
                         .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::from_head_response(client, response).await?;
+                let self_ = Self::from_head_response(client, response, extra_headers).await?;
                 Ok((self_, response_headers))
             }
         }
@@ -198,6 +199,7 @@ impl AsyncHttpRangeReader {
     pub async fn from_tail_response(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         tail_request_response: Response,
+        extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
         let client = client.into();
 
@@ -243,6 +245,7 @@ impl AsyncHttpRangeReader {
         tokio::spawn(run_streamer(
             client,
             tail_request_response.url().clone(),
+            extra_headers,
             Some((tail_request_response, start)),
             memory_map,
             state_tx,
@@ -296,6 +299,7 @@ impl AsyncHttpRangeReader {
     pub async fn from_head_response(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         head_response: Response,
+        extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
         let client = client.into();
 
@@ -341,6 +345,7 @@ impl AsyncHttpRangeReader {
         tokio::spawn(run_streamer(
             client,
             head_response.url().clone(),
+            extra_headers,
             None,
             memory_map,
             state_tx,
@@ -406,6 +411,7 @@ impl AsyncHttpRangeReader {
 async fn run_streamer(
     client: reqwest_middleware::ClientWithMiddleware,
     url: Url,
+    extra_headers: HeaderMap,
     initial_tail_response: Option<(Response, u64)>,
     mut memory_map: MmapMut,
     mut state_tx: Sender<StreamerState>,
@@ -461,6 +467,7 @@ async fn run_streamer(
             let response = match client
                 .get(url.clone())
                 .header(reqwest::header::RANGE, range_string)
+                .headers(extra_headers.clone())
                 .send()
                 .instrument(span)
                 .await
