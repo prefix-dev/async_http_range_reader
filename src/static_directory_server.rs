@@ -21,7 +21,7 @@ impl StaticDirectoryServer {
 }
 
 impl StaticDirectoryServer {
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub async fn new(path: impl AsRef<Path>) -> Result<Self, StaticDirectoryServerError> {
         let service = get_service(ServeDir::new(path));
 
         // Create a router that will serve the static files
@@ -31,25 +31,27 @@ impl StaticDirectoryServer {
         // port is very important because it enables creating multiple instances at the same time.
         // We need this to be able to run tests in parallel.
         let addr = SocketAddr::new([127, 0, 0, 1].into(), 0);
-        let server = axum::Server::bind(&addr).serve(app.into_make_service());
+        let listener = tokio::net::TcpListener::bind(addr).await?;
 
         // Get the address of the server so we can bind to it at a later stage.
-        let addr = server.local_addr();
+        let addr = listener.local_addr()?;
 
         // Setup a graceful shutdown trigger which is fired when this instance is dropped.
         let (tx, rx) = oneshot::channel();
-        let server = server.with_graceful_shutdown(async {
-            rx.await.ok();
+
+        // Spawn the server in the background.
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await;
         });
 
-        // Spawn the server. Let go of the JoinHandle, we can use the graceful shutdown trigger to
-        // stop the server.
-        tokio::spawn(server);
-
-        Self {
+        Ok(Self {
             local_addr: addr,
             shutdown_sender: Some(tx),
-        }
+        })
     }
 }
 
@@ -59,4 +61,10 @@ impl Drop for StaticDirectoryServer {
             let _ = tx.send(());
         }
     }
+}
+/// Error type used for [`StaticDirectoryServerError`]
+#[derive(Debug, thiserror::Error)]
+pub enum StaticDirectoryServerError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
