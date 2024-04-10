@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/prefix-dev/async_http_range_reader/compare/v0.7.0...v0.7.1) - 2024-04-10
+
+### Other
+- Upgrade `reqwest` to v0.12.3 ([#12](https://github.com/prefix-dev/async_http_range_reader/pull/12))
+
 ## [0.7.0](https://github.com/prefix-dev/async_http_range_reader/compare/v0.6.1...v0.7.0) - 2024-02-23
 
 ### Added
