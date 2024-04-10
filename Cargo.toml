@@ -14,8 +14,8 @@ http-content-range = "0.1.2"
 itertools = "0.12.1"
 bisection = "0.1.0"
 memmap2 = "0.9.0"
-reqwest = { version = "0.11.22", default-features = false, features = ["stream"] }
-reqwest-middleware = "0.2.4"
+reqwest = { version = "0.12.3", default-features = false, features = ["stream"] }
+reqwest-middleware = "0.3.0"
 tokio = { version = "1.33.0", default-features = false }
 tokio-stream = { version = "0.1.14", features = ["sync"] }
 tokio-util = "0.7.9"
@@ -23,9 +23,9 @@ thiserror = "1.0.50"
 tracing = "0.1.40"
 
 [dev-dependencies]
-axum = { version = "0.6.20", default-features = false, features = ["tokio"] }
+axum = { version = "0.7.5", default-features = false, features = ["tokio", "http1"] }
 tokio = { version = "1.33.0", default-features = false, features = ["macros", "test-util"] }
-tower-http = { version = "0.4.4", default-features = false, features = ["fs"] }
+tower-http = { version = "0.5.2", default-features = false, features = ["fs"] }
 async_zip = { version = "0.0.15", default-features = false, features = ["tokio"] }
 assert_matches = "1.5.0"
 rstest = { version = "0.18.2" }

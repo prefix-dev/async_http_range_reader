@@ -669,7 +669,9 @@ mod test {
     async fn async_range_reader_zip(#[case] check_method: CheckSupportMethod) {
         // Spawn a static file server
         let path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("test-data");
-        let server = StaticDirectoryServer::new(&path);
+        let server = StaticDirectoryServer::new(&path)
+            .await
+            .expect("could not initialize server");
 
         // check that file is there and has the right size
         let filepath = path.join("andes-1.8.3-pyhd8ed1ab_0.conda");
@@ -776,7 +778,9 @@ mod test {
     async fn async_range_reader(#[case] check_method: CheckSupportMethod) {
         // Spawn a static file server
         let path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("test-data");
-        let server = StaticDirectoryServer::new(&path);
+        let server = StaticDirectoryServer::new(&path)
+            .await
+            .expect("could not initialize server");
 
         // Construct an AsyncRangeReader
         let (mut range, _) = AsyncHttpRangeReader::new(
@@ -820,7 +824,9 @@ mod test {
 
     #[tokio::test]
     async fn test_not_found() {
-        let server = StaticDirectoryServer::new(Path::new(env!("CARGO_MANIFEST_DIR")));
+        let server = StaticDirectoryServer::new(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .await
+            .expect("could not initialize server");
         let err = AsyncHttpRangeReader::new(
             Client::new(),
             server.url().join("not-found").unwrap(),
