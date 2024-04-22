@@ -49,3 +49,19 @@ impl From<reqwest::Error> for AsyncHttpRangeReaderError {
         AsyncHttpRangeReaderError::TransportError(Arc::new(err.into()))
     }
 }
+
+/// Error type used for [`crate::AsyncHttpRangeReaderBuilder`]
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum AsyncHttpRangeReaderBuilderError {
+    /// Required field 'client' is missing
+    #[error("required field 'client' is missing")]
+    MissingClient,
+
+    /// Required field 'url' is missing
+    #[error("required field 'url' is missing")]
+    MissingUrl,
+
+    /// Memory mapping the file failed
+    #[error("memory mapping the file failed")]
+    MemoryMapError(#[source] Arc<std::io::Error>),
+}

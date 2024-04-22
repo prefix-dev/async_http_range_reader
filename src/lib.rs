@@ -19,6 +19,7 @@
 mod error;
 mod sparse_range;
 
+use error::AsyncHttpRangeReaderBuilderError;
 use futures::{FutureExt, Stream, StreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes};
 use memmap2::MmapMut;
@@ -168,6 +169,11 @@ impl AsyncHttpRangeReader {
                 Ok((self_, response_headers))
             }
         }
+    }
+
+    // Make a builder for AsyncHttpRangeReader
+    pub fn builder() -> AsyncHttpRangeReaderBuilder {
+        AsyncHttpRangeReaderBuilder::default()
     }
 
     /// Send an initial range request to determine if the remote accepts range
@@ -403,6 +409,105 @@ impl AsyncHttpRangeReader {
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
         self.len
+    }
+}
+
+#[derive(Default)]
+pub struct AsyncHttpRangeReaderBuilder {
+    client: Option<reqwest_middleware::ClientWithMiddleware>,
+    url: Option<Url>,
+    extra_headers: HeaderMap,
+    requested_range: SparseRange,
+    streamer_state: StreamerState,
+    initial_tail_response: Option<(Response, u64)>,
+    content_length: usize,
+}
+
+impl AsyncHttpRangeReaderBuilder {
+    pub fn client(mut self, client: reqwest_middleware::ClientWithMiddleware) -> Self {
+        self.client = Some(client);
+        self
+    }
+
+    pub fn url(mut self, url: Url) -> Self {
+        self.url = Some(url);
+        self
+    }
+
+    pub fn extra_headers(mut self, extra_headers: HeaderMap) -> Self {
+        self.extra_headers = extra_headers;
+        self
+    }
+
+    pub fn requested_range(mut self, requested_range: SparseRange) -> Self {
+        self.requested_range = requested_range;
+        self
+    }
+
+    fn streamer_state(mut self, streamer_state: StreamerState) -> Self {
+        self.streamer_state = streamer_state;
+        self
+    }
+
+    pub fn initial_tail_response(mut self, initial_tail_response: Option<(Response, u64)>) -> Self {
+        self.initial_tail_response = initial_tail_response;
+        self
+    }
+
+    pub fn content_length(mut self, content_length: usize) -> Self {
+        self.content_length = content_length;
+        self
+    }
+
+    pub fn build(self) -> Result<AsyncHttpRangeReader, AsyncHttpRangeReaderBuilderError> {
+        let Some(client) = self.client else {
+            return Err(AsyncHttpRangeReaderBuilderError::MissingClient);
+        };
+        let Some(url) = self.url else {
+            return Err(AsyncHttpRangeReaderBuilderError::MissingUrl);
+        };
+
+        let memory_map = memmap2::MmapOptions::new()
+            .len(self.content_length)
+            .map_anon()
+            .map_err(Arc::new)
+            .map_err(AsyncHttpRangeReaderBuilderError::MemoryMapError)?;
+
+        // SAFETY: Get a read-only slice to the memory. This is safe because the memory map is never
+        // reallocated and we keep track of the initialized part.
+        let memory_map_slice =
+            unsafe { std::slice::from_raw_parts(memory_map.as_ptr(), memory_map.len()) };
+
+        // adding more than 2 entries to the channel would block the sender. I assumed two would
+        // suffice because I would want to 1) prefetch a certain range and 2) read stuff via the
+        // AsyncRead implementation. Any extra would simply have to wait for one of these to
+        // succeed. I eventually used 10 because who cares.
+        let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
+        let (state_tx, state_rx) = watch::channel(StreamerState::default());
+
+        tokio::spawn(run_streamer(
+            client,
+            url.clone(),
+            self.extra_headers,
+            self.initial_tail_response,
+            memory_map,
+            state_tx,
+            request_rx,
+        ));
+
+        let reader = AsyncHttpRangeReader {
+            len: memory_map_slice.len() as u64,
+            inner: Mutex::new(Inner {
+                data: memory_map_slice,
+                pos: 0,
+                requested_range: self.requested_range,
+                streamer_state: self.streamer_state,
+                streamer_state_rx: WatchStream::new(state_rx),
+                request_tx,
+                poll_request_tx: None,
+            }),
+        };
+        Ok(reader)
     }
 }
 
@@ -839,5 +944,19 @@ mod test {
         assert_matches!(
             err, AsyncHttpRangeReaderError::HttpError(err) if err.status() == Some(StatusCode::NOT_FOUND)
         );
+    }
+
+    #[tokio::test]
+    async fn test_builder_happy_path() {
+        let path = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("test-data");
+        let server = StaticDirectoryServer::new(&path)
+            .await
+            .expect("could not initialize server");
+
+        AsyncHttpRangeReader::builder()
+            .client(Client::new().into())
+            .url(server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap())
+            .build()
+            .expect("could not build reader");
     }
 }
