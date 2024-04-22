@@ -72,7 +72,7 @@ pub use error::AsyncHttpRangeReaderError;
 ///     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
 ///         Ok(None)
 ///     } else {
-///         let reader = AsyncHttpRangeReader::from_head_response(client, response, HeaderMap::default()).await?;
+///         let reader = AsyncHttpRangeReader::from_head_response(client, response, HeaderMap::default())?;
 ///         Ok(Some(reader))
 ///     }
 /// }
@@ -156,7 +156,7 @@ impl AsyncHttpRangeReader {
                 )
                 .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::from_tail_response(client, response, extra_headers).await?;
+                let self_ = Self::from_tail_response(client, response, extra_headers)?;
                 Ok((self_, response_headers))
             }
             CheckSupportMethod::Head => {
@@ -164,7 +164,7 @@ impl AsyncHttpRangeReader {
                     Self::initial_head_request(client.clone(), url.clone(), HeaderMap::default())
                         .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::from_head_response(client, response, extra_headers).await?;
+                let self_ = Self::from_head_response(client, response, extra_headers)?;
                 Ok((self_, response_headers))
             }
         }
@@ -197,7 +197,7 @@ impl AsyncHttpRangeReader {
 
     /// Initialize the reader from [`AsyncHttpRangeReader::initial_tail_request`] (or a user
     /// provided response that also has a range of bytes from the end as body)
-    pub async fn from_tail_response(
+    pub fn from_tail_response(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         tail_request_response: Response,
         extra_headers: HeaderMap,
@@ -297,7 +297,7 @@ impl AsyncHttpRangeReader {
 
     /// Initialize the reader from [`AsyncHttpRangeReader::initial_head_request`] (or a user
     /// provided response the)
-    pub async fn from_head_response(
+    pub fn from_head_response(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         head_response: Response,
         extra_headers: HeaderMap,
