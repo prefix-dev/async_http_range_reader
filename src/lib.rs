@@ -208,41 +208,9 @@ impl AsyncHttpRangeReader {
         tail_request_response: Response,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
-        // Get the size of the file from this initial request
-        let content_range = ContentRange::parse(
-            tail_request_response
-                .headers()
-                .get(reqwest::header::CONTENT_RANGE)
-                .ok_or(AsyncHttpRangeReaderError::ContentRangeMissing)?
-                .to_str()
-                .map_err(|_err| AsyncHttpRangeReaderError::ContentRangeMissing)?,
-        );
-        let (start, finish, complete_length) = match content_range {
-            ContentRange::Bytes(ContentRangeBytes {
-                first_byte,
-                last_byte,
-                complete_length,
-            }) => (first_byte, last_byte, complete_length),
-            _ => return Err(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported),
-        };
-
-        let requested_range =
-            SparseRange::from_range(complete_length - (finish - start)..complete_length);
-
-        // Configure the initial state of the streamer.
-        let mut streamer_state = StreamerState::default();
-        streamer_state
-            .requested_ranges
-            .push(complete_length - (finish - start)..complete_length);
-
-        Self::builder()
+        AsyncHttpRangeReaderBuilder::from_tail_response(tail_request_response)?
             .client(client.into())
-            .url(tail_request_response.url().clone())
             .extra_headers(extra_headers)
-            .initial_tail_response(Some((tail_request_response, start)))
-            .content_length(complete_length as usize)
-            .requested_range(requested_range)
-            .streamer_state(streamer_state)
             .build()
             .map_err(AsyncHttpRangeReaderError::from)
     }
@@ -275,32 +243,9 @@ impl AsyncHttpRangeReader {
         head_response: Response,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
-        let client = client.into();
-
-        // Are range requests supported?
-        if head_response
-            .headers()
-            .get(reqwest::header::ACCEPT_RANGES)
-            .and_then(|h| h.to_str().ok())
-            != Some("bytes")
-        {
-            return Err(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported);
-        }
-
-        let content_length: u64 = head_response
-            .headers()
-            .get(reqwest::header::CONTENT_LENGTH)
-            .ok_or(AsyncHttpRangeReaderError::ContentLengthMissing)?
-            .to_str()
-            .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?
-            .parse()
-            .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?;
-
-        Self::builder()
-            .client(client)
-            .url(head_response.url().clone())
+        AsyncHttpRangeReaderBuilder::from_head_response(head_response)?
+            .client(client.into())
             .extra_headers(extra_headers)
-            .content_length(content_length as usize)
             .build()
             .map_err(AsyncHttpRangeReaderError::from)
     }
@@ -385,6 +330,68 @@ impl AsyncHttpRangeReaderBuilder {
     pub fn content_length(mut self, content_length: usize) -> Self {
         self.content_length = content_length;
         self
+    }
+
+    pub fn from_head_response(head_response: Response) -> Result<Self, AsyncHttpRangeReaderError> {
+        // Are range requests supported?
+        if head_response
+            .headers()
+            .get(reqwest::header::ACCEPT_RANGES)
+            .and_then(|h| h.to_str().ok())
+            != Some("bytes")
+        {
+            return Err(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported);
+        }
+
+        let content_length: u64 = head_response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .ok_or(AsyncHttpRangeReaderError::ContentLengthMissing)?
+            .to_str()
+            .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?
+            .parse()
+            .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?;
+
+        let builder = Self::default()
+            .url(head_response.url().clone())
+            .content_length(content_length as usize);
+
+        Ok(builder)
+    }
+
+    pub fn from_tail_response(tail_response: Response) -> Result<Self, AsyncHttpRangeReaderError> {
+        let content_range = ContentRange::parse(
+            tail_response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .ok_or(AsyncHttpRangeReaderError::ContentRangeMissing)?
+                .to_str()
+                .map_err(|_err| AsyncHttpRangeReaderError::ContentRangeMissing)?,
+        );
+        let (start, finish, complete_length) = match content_range {
+            ContentRange::Bytes(ContentRangeBytes {
+                first_byte,
+                last_byte,
+                complete_length,
+            }) => (first_byte, last_byte, complete_length),
+            _ => return Err(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported),
+        };
+
+        let requested_range =
+            SparseRange::from_range(complete_length - (finish - start)..complete_length);
+
+        // Configure the initial state of the streamer.
+        let mut streamer_state = StreamerState::default();
+        streamer_state
+            .requested_ranges
+            .push(complete_length - (finish - start)..complete_length);
+        let builder = Self::default()
+            .url(tail_response.url().clone())
+            .initial_tail_response(Some((tail_response, start)))
+            .requested_range(requested_range)
+            .content_length(complete_length as usize)
+            .streamer_state(streamer_state);
+        Ok(builder)
     }
 
     pub fn build(self) -> Result<AsyncHttpRangeReader, AsyncHttpRangeReaderBuilderError> {
