@@ -30,6 +30,10 @@ pub enum AsyncHttpRangeReaderError {
     /// Memory mapping the file failed
     #[error("memory mapping the file failed")]
     MemoryMapError(#[source] Arc<std::io::Error>),
+
+    /// Error building the reader
+    #[error("error building the reader: {0}")]
+    BuilderError(#[source] Arc<AsyncHttpRangeReaderBuilderError>),
 }
 
 impl From<std::io::Error> for AsyncHttpRangeReaderError {
@@ -47,6 +51,12 @@ impl From<reqwest_middleware::Error> for AsyncHttpRangeReaderError {
 impl From<reqwest::Error> for AsyncHttpRangeReaderError {
     fn from(err: reqwest::Error) -> Self {
         AsyncHttpRangeReaderError::TransportError(Arc::new(err.into()))
+    }
+}
+
+impl From<AsyncHttpRangeReaderBuilderError> for AsyncHttpRangeReaderError {
+    fn from(err: AsyncHttpRangeReaderBuilderError) -> Self {
+        AsyncHttpRangeReaderError::BuilderError(Arc::new(err))
     }
 }
 

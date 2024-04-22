@@ -208,8 +208,6 @@ impl AsyncHttpRangeReader {
         tail_request_response: Response,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
-        let client = client.into();
-
         // Get the size of the file from this initial request
         let content_range = ContentRange::parse(
             tail_request_response
@@ -228,36 +226,8 @@ impl AsyncHttpRangeReader {
             _ => return Err(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported),
         };
 
-        // Allocate a memory map to hold the data
-        let memory_map = memmap2::MmapOptions::new()
-            .len(complete_length as usize)
-            .map_anon()
-            .map_err(Arc::new)
-            .map_err(AsyncHttpRangeReaderError::MemoryMapError)?;
-
-        // SAFETY: Get a read-only slice to the memory. This is safe because the memory map is never
-        // reallocated and we keep track of the initialized part.
-        let memory_map_slice =
-            unsafe { std::slice::from_raw_parts(memory_map.as_ptr(), memory_map.len()) };
-
         let requested_range =
             SparseRange::from_range(complete_length - (finish - start)..complete_length);
-
-        // adding more than 2 entries to the channel would block the sender. I assumed two would
-        // suffice because I would want to 1) prefetch a certain range and 2) read stuff via the
-        // AsyncRead implementation. Any extra would simply have to wait for one of these to
-        // succeed. I eventually used 10 because who cares.
-        let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
-        let (state_tx, state_rx) = watch::channel(StreamerState::default());
-        tokio::spawn(run_streamer(
-            client,
-            tail_request_response.url().clone(),
-            extra_headers,
-            Some((tail_request_response, start)),
-            memory_map,
-            state_tx,
-            request_rx,
-        ));
 
         // Configure the initial state of the streamer.
         let mut streamer_state = StreamerState::default();
@@ -265,19 +235,16 @@ impl AsyncHttpRangeReader {
             .requested_ranges
             .push(complete_length - (finish - start)..complete_length);
 
-        let reader = Self {
-            len: memory_map_slice.len() as u64,
-            inner: Mutex::new(Inner {
-                data: memory_map_slice,
-                pos: 0,
-                requested_range,
-                streamer_state,
-                streamer_state_rx: WatchStream::new(state_rx),
-                request_tx,
-                poll_request_tx: None,
-            }),
-        };
-        Ok(reader)
+        Self::builder()
+            .client(client.into())
+            .url(tail_request_response.url().clone())
+            .extra_headers(extra_headers)
+            .initial_tail_response(Some((tail_request_response, start)))
+            .content_length(complete_length as usize)
+            .requested_range(requested_range)
+            .streamer_state(streamer_state)
+            .build()
+            .map_err(AsyncHttpRangeReaderError::from)
     }
 
     /// Send an initial range request to determine if the remote accepts range
@@ -329,52 +296,13 @@ impl AsyncHttpRangeReader {
             .parse()
             .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?;
 
-        // Allocate a memory map to hold the data
-        let memory_map = memmap2::MmapOptions::new()
-            .len(content_length as _)
-            .map_anon()
-            .map_err(Arc::new)
-            .map_err(AsyncHttpRangeReaderError::MemoryMapError)?;
-
-        // SAFETY: Get a read-only slice to the memory. This is safe because the memory map is never
-        // reallocated and we keep track of the initialized part.
-        let memory_map_slice =
-            unsafe { std::slice::from_raw_parts(memory_map.as_ptr(), memory_map.len()) };
-
-        let requested_range = SparseRange::default();
-
-        // adding more than 2 entries to the channel would block the sender. I assumed two would
-        // suffice because I would want to 1) prefetch a certain range and 2) read stuff via the
-        // AsyncRead implementation. Any extra would simply have to wait for one of these to
-        // succeed. I eventually used 10 because who cares.
-        let (request_tx, request_rx) = tokio::sync::mpsc::channel(10);
-        let (state_tx, state_rx) = watch::channel(StreamerState::default());
-        tokio::spawn(run_streamer(
-            client,
-            head_response.url().clone(),
-            extra_headers,
-            None,
-            memory_map,
-            state_tx,
-            request_rx,
-        ));
-
-        // Configure the initial state of the streamer.
-        let streamer_state = StreamerState::default();
-
-        let reader = Self {
-            len: memory_map_slice.len() as u64,
-            inner: Mutex::new(Inner {
-                data: memory_map_slice,
-                pos: 0,
-                requested_range,
-                streamer_state,
-                streamer_state_rx: WatchStream::new(state_rx),
-                request_tx,
-                poll_request_tx: None,
-            }),
-        };
-        Ok(reader)
+        Self::builder()
+            .client(client)
+            .url(head_response.url().clone())
+            .extra_headers(extra_headers)
+            .content_length(content_length as usize)
+            .build()
+            .map_err(AsyncHttpRangeReaderError::from)
     }
 
     /// Returns the ranges that this instance actually performed HTTP requests for.
