@@ -172,8 +172,10 @@ impl AsyncHttpRangeReader {
     }
 
     // Make a builder for AsyncHttpRangeReader
-    pub fn builder() -> AsyncHttpRangeReaderBuilder {
-        AsyncHttpRangeReaderBuilder::default()
+    pub fn builder(
+        client: reqwest_middleware::ClientWithMiddleware,
+    ) -> AsyncHttpRangeReaderBuilder {
+        AsyncHttpRangeReaderBuilder::new(client)
     }
 
     /// Send an initial range request to determine if the remote accepts range
@@ -208,8 +210,8 @@ impl AsyncHttpRangeReader {
         tail_request_response: Response,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
-        AsyncHttpRangeReaderBuilder::from_tail_response(tail_request_response)?
-            .client(client.into())
+        AsyncHttpRangeReaderBuilder::new(client.into())
+            .from_tail_response(tail_request_response)?
             .extra_headers(extra_headers)
             .build()
             .map_err(AsyncHttpRangeReaderError::from)
@@ -243,8 +245,8 @@ impl AsyncHttpRangeReader {
         head_response: Response,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
-        AsyncHttpRangeReaderBuilder::from_head_response(head_response)?
-            .client(client.into())
+        AsyncHttpRangeReaderBuilder::new(client.into())
+            .from_head_response(head_response)?
             .extra_headers(extra_headers)
             .build()
             .map_err(AsyncHttpRangeReaderError::from)
@@ -285,9 +287,8 @@ impl AsyncHttpRangeReader {
     }
 }
 
-#[derive(Default)]
 pub struct AsyncHttpRangeReaderBuilder {
-    client: Option<reqwest_middleware::ClientWithMiddleware>,
+    client: reqwest_middleware::ClientWithMiddleware,
     url: Option<Url>,
     extra_headers: HeaderMap,
     requested_range: SparseRange,
@@ -297,9 +298,16 @@ pub struct AsyncHttpRangeReaderBuilder {
 }
 
 impl AsyncHttpRangeReaderBuilder {
-    pub fn client(mut self, client: reqwest_middleware::ClientWithMiddleware) -> Self {
-        self.client = Some(client);
-        self
+    pub fn new(client: reqwest_middleware::ClientWithMiddleware) -> Self {
+        Self {
+            client,
+            url: None,
+            extra_headers: HeaderMap::default(),
+            requested_range: SparseRange::default(),
+            streamer_state: StreamerState::default(),
+            initial_tail_response: None,
+            content_length: 0,
+        }
     }
 
     pub fn url(mut self, url: Url) -> Self {
@@ -312,7 +320,7 @@ impl AsyncHttpRangeReaderBuilder {
         self
     }
 
-    pub fn requested_range(mut self, requested_range: SparseRange) -> Self {
+    fn requested_range(mut self, requested_range: SparseRange) -> Self {
         self.requested_range = requested_range;
         self
     }
@@ -322,7 +330,7 @@ impl AsyncHttpRangeReaderBuilder {
         self
     }
 
-    pub fn initial_tail_response(mut self, initial_tail_response: Option<(Response, u64)>) -> Self {
+    fn initial_tail_response(mut self, initial_tail_response: Option<(Response, u64)>) -> Self {
         self.initial_tail_response = initial_tail_response;
         self
     }
@@ -332,7 +340,10 @@ impl AsyncHttpRangeReaderBuilder {
         self
     }
 
-    pub fn from_head_response(head_response: Response) -> Result<Self, AsyncHttpRangeReaderError> {
+    pub fn from_head_response(
+        self,
+        head_response: Response,
+    ) -> Result<Self, AsyncHttpRangeReaderError> {
         // Are range requests supported?
         if head_response
             .headers()
@@ -352,14 +363,17 @@ impl AsyncHttpRangeReaderBuilder {
             .parse()
             .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?;
 
-        let builder = Self::default()
+        let builder = self
             .url(head_response.url().clone())
             .content_length(content_length as usize);
 
         Ok(builder)
     }
 
-    pub fn from_tail_response(tail_response: Response) -> Result<Self, AsyncHttpRangeReaderError> {
+    pub fn from_tail_response(
+        self,
+        tail_response: Response,
+    ) -> Result<Self, AsyncHttpRangeReaderError> {
         let content_range = ContentRange::parse(
             tail_response
                 .headers()
@@ -385,7 +399,7 @@ impl AsyncHttpRangeReaderBuilder {
         streamer_state
             .requested_ranges
             .push(complete_length - (finish - start)..complete_length);
-        let builder = Self::default()
+        let builder = self
             .url(tail_response.url().clone())
             .initial_tail_response(Some((tail_response, start)))
             .requested_range(requested_range)
@@ -395,12 +409,13 @@ impl AsyncHttpRangeReaderBuilder {
     }
 
     pub fn build(self) -> Result<AsyncHttpRangeReader, AsyncHttpRangeReaderBuilderError> {
-        let Some(client) = self.client else {
-            return Err(AsyncHttpRangeReaderBuilderError::MissingClient);
-        };
         let Some(url) = self.url else {
             return Err(AsyncHttpRangeReaderBuilderError::MissingUrl);
         };
+
+        if self.content_length == 0 {
+            return Err(AsyncHttpRangeReaderBuilderError::InvalidContentLength);
+        }
 
         let memory_map = memmap2::MmapOptions::new()
             .len(self.content_length)
@@ -421,7 +436,7 @@ impl AsyncHttpRangeReaderBuilder {
         let (state_tx, state_rx) = watch::channel(StreamerState::default());
 
         tokio::spawn(run_streamer(
-            client,
+            self.client,
             url.clone(),
             self.extra_headers,
             self.initial_tail_response,
@@ -888,9 +903,18 @@ mod test {
             .await
             .expect("could not initialize server");
 
-        AsyncHttpRangeReader::builder()
-            .client(Client::new().into())
-            .url(server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap())
+        let url = server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap();
+        let head_response = AsyncHttpRangeReader::initial_head_request(
+            Client::new(),
+            url.clone(),
+            HeaderMap::default(),
+        )
+        .await
+        .expect("could not perform head request");
+
+        AsyncHttpRangeReader::builder(Client::new().into())
+            .from_head_response(head_response)
+            .expect("could not build reader")
             .build()
             .expect("could not build reader");
     }

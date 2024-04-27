@@ -63,9 +63,9 @@ impl From<AsyncHttpRangeReaderBuilderError> for AsyncHttpRangeReaderError {
 /// Error type used for [`crate::AsyncHttpRangeReaderBuilder`]
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum AsyncHttpRangeReaderBuilderError {
-    /// Required field 'client' is missing
-    #[error("required field 'client' is missing")]
-    MissingClient,
+    /// Required field 'content_length' is zero
+    #[error("required field 'content_length' is zero")]
+    InvalidContentLength,
 
     /// Required field 'url' is missing
     #[error("required field 'url' is missing")]
