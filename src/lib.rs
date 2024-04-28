@@ -22,7 +22,6 @@ mod sparse_range;
 use error::AsyncHttpRangeReaderBuilderError;
 use futures::{FutureExt, Stream, StreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes};
-use itertools::Itertools;
 use memmap2::MmapMut;
 use reqwest::header::HeaderMap;
 use reqwest::{Response, Url};
