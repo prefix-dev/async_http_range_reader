@@ -22,6 +22,7 @@ mod sparse_range;
 use error::AsyncHttpRangeReaderBuilderError;
 use futures::{FutureExt, Stream, StreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes};
+use itertools::Itertools;
 use memmap2::MmapMut;
 use reqwest::header::HeaderMap;
 use reqwest::{Response, Url};
@@ -714,7 +715,7 @@ mod test {
     use reqwest::{Client, StatusCode};
     use rstest::*;
     use std::path::Path;
-    use tokio::io::AsyncReadExt as _;
+    use tokio::{fs::File, io::AsyncReadExt as _};
     use tokio_util::compat::TokioAsyncReadCompatExt;
 
     #[rstest]
@@ -838,7 +839,7 @@ mod test {
             .expect("could not initialize server");
 
         // Construct an AsyncRangeReader
-        let (mut range, _) = AsyncHttpRangeReader::new(
+        let (range, _) = AsyncHttpRangeReader::new(
             Client::new(),
             server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap(),
             check_method,
@@ -848,10 +849,14 @@ mod test {
         .expect("bla");
 
         // Also open a simple file reader
-        let mut file = tokio::fs::File::open(path.join("andes-1.8.3-pyhd8ed1ab_0.conda"))
+        let file = tokio::fs::File::open(path.join("andes-1.8.3-pyhd8ed1ab_0.conda"))
             .await
             .unwrap();
 
+        assert_range_and_file_contents_match(range, file).await;
+    }
+
+    async fn assert_range_and_file_contents_match(mut range: AsyncHttpRangeReader, mut file: File) {
         // Read until the end and make sure that the contents matches
         let mut range_read = vec![0; 64 * 1024];
         let mut file_read = vec![0; 64 * 1024];
@@ -904,6 +909,8 @@ mod test {
             .expect("could not initialize server");
 
         let url = server.url().join("andes-1.8.3-pyhd8ed1ab_0.conda").unwrap();
+
+        // First, let's try to build the reader from a head response
         let head_response = AsyncHttpRangeReader::initial_head_request(
             Client::new(),
             url.clone(),
@@ -912,10 +919,50 @@ mod test {
         .await
         .expect("could not perform head request");
 
-        AsyncHttpRangeReader::builder(Client::new().into())
+        let builder = AsyncHttpRangeReader::builder(Client::new().into())
             .from_head_response(head_response)
-            .expect("could not build reader")
+            .expect("could not build reader from head response")
             .build()
             .expect("could not build reader");
+        let file = tokio::fs::File::open(path.join("andes-1.8.3-pyhd8ed1ab_0.conda"))
+            .await
+            .unwrap();
+
+        // And let's make sure that the contents match the file
+        assert_range_and_file_contents_match(builder, file).await;
+
+        // Now let's try to build the reader from a tail response
+        let tail_response = AsyncHttpRangeReader::initial_tail_request(
+            Client::new(),
+            url.clone(),
+            8192,
+            HeaderMap::default(),
+        )
+        .await
+        .expect("could not perform tail request");
+
+        let builder = AsyncHttpRangeReader::builder(Client::new().into())
+            .from_tail_response(tail_response)
+            .expect("could not build reader from tail response")
+            .build()
+            .expect("could not build reader");
+        let file = tokio::fs::File::open(path.join("andes-1.8.3-pyhd8ed1ab_0.conda"))
+            .await
+            .unwrap();
+
+        // And again let's make sure that the contents match the file
+        assert_range_and_file_contents_match(builder, file).await;
+    }
+
+    #[test]
+    fn test_builder_fails_on_missing_content_length() {
+        let url = Url::parse("http://localhost").unwrap();
+        let result = AsyncHttpRangeReader::builder(Client::new().into())
+            .url(url)
+            .build();
+        assert_matches!(
+            result,
+            Err(AsyncHttpRangeReaderBuilderError::InvalidContentLength)
+        );
     }
 }
