@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/prefix-dev/async_http_range_reader/compare/v0.7.1...v0.8.0) - 2024-05-06
+
+### Fixed
+- always use requested URL, rather than response URL ([#16](https://github.com/prefix-dev/async_http_range_reader/pull/16))
+
 ## [0.7.1](https://github.com/prefix-dev/async_http_range_reader/compare/v0.7.0...v0.7.1) - 2024-04-10
 
 ### Other
