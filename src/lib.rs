@@ -72,7 +72,7 @@ pub use error::AsyncHttpRangeReaderError;
 ///     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
 ///         Ok(None)
 ///     } else {
-///         let reader = AsyncHttpRangeReader::from_head_response(client, response, HeaderMap::default()).await?;
+///         let reader = AsyncHttpRangeReader::from_head_response(client, response, url, HeaderMap::default()).await?;
 ///         Ok(Some(reader))
 ///     }
 /// }
@@ -141,7 +141,7 @@ impl AsyncHttpRangeReader {
     /// Construct a new `AsyncHttpRangeReader`.
     pub async fn new(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
-        url: reqwest::Url,
+        url: Url,
         check_method: CheckSupportMethod,
         extra_headers: HeaderMap,
     ) -> Result<(Self, HeaderMap), AsyncHttpRangeReaderError> {
@@ -156,7 +156,7 @@ impl AsyncHttpRangeReader {
                 )
                 .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::from_tail_response(client, response, extra_headers).await?;
+                let self_ = Self::from_tail_response(client, response, url, extra_headers).await?;
                 Ok((self_, response_headers))
             }
             CheckSupportMethod::Head => {
@@ -164,7 +164,7 @@ impl AsyncHttpRangeReader {
                     Self::initial_head_request(client.clone(), url.clone(), HeaderMap::default())
                         .await?;
                 let response_headers = response.headers().clone();
-                let self_ = Self::from_head_response(client, response, extra_headers).await?;
+                let self_ = Self::from_head_response(client, response, url, extra_headers).await?;
                 Ok((self_, response_headers))
             }
         }
@@ -200,6 +200,7 @@ impl AsyncHttpRangeReader {
     pub async fn from_tail_response(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         tail_request_response: Response,
+        url: Url,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
         let client = client.into();
@@ -245,7 +246,7 @@ impl AsyncHttpRangeReader {
         let (state_tx, state_rx) = watch::channel(StreamerState::default());
         tokio::spawn(run_streamer(
             client,
-            tail_request_response.url().clone(),
+            url,
             extra_headers,
             Some((tail_request_response, start)),
             memory_map,
@@ -300,6 +301,7 @@ impl AsyncHttpRangeReader {
     pub async fn from_head_response(
         client: impl Into<reqwest_middleware::ClientWithMiddleware>,
         head_response: Response,
+        url: Url,
         extra_headers: HeaderMap,
     ) -> Result<Self, AsyncHttpRangeReaderError> {
         let client = client.into();
@@ -345,7 +347,7 @@ impl AsyncHttpRangeReader {
         let (state_tx, state_rx) = watch::channel(StreamerState::default());
         tokio::spawn(run_streamer(
             client,
-            head_response.url().clone(),
+            url,
             extra_headers,
             None,
             memory_map,
@@ -730,7 +732,7 @@ mod test {
         );
 
         // Prefetch the data for the metadata.json file
-        let entry = reader.file().entries().get(0).unwrap();
+        let entry = reader.file().entries().first().unwrap();
         let offset = entry.header_offset();
         // Get the size of the entry plus the header + size of the filename. We should also actually
         // include bytes for the extra fields but we don't have that information.
