@@ -12,7 +12,6 @@ exclude = ["test-data/*"]
 futures = "0.3.28"
 http-content-range = "0.1.2"
 itertools = "0.12.1"
-bisection = "0.1.0"
 memmap2 = "0.9.0"
 reqwest = { version = "0.12.3", default-features = false, features = ["stream"] }
 reqwest-middleware = "0.3.0"
