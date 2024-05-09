@@ -1,4 +1,3 @@
-use bisection::{bisect_left, bisect_right};
 use itertools::Itertools;
 use std::{
     fmt::{Debug, Display, Formatter},
@@ -55,8 +54,8 @@ impl SparseRange {
         let range_end = range.end - 1;
 
         // Compute the indices of the ranges that are covered by the request
-        let left_index = bisect_left(&self.right, &range_start);
-        let right_index = bisect_right(&self.left, &(range_end + 1));
+        let left_index = self.right.partition_point(|x| x < &range_start);
+        let right_index = self.left.partition_point(|x| x <= &(range_end + 1));
 
         // Get all the range bounds that are covered
         let left_slice = &self.left[left_index..right_index];
@@ -97,8 +96,8 @@ impl SparseRange {
         let range_end = range.end - 1;
 
         // Compute the indices of the ranges that are covered by the request
-        let left_index = bisect_left(&self.right, &range_start);
-        let right_index = bisect_right(&self.left, &(range_end + 1));
+        let left_index = self.right.partition_point(|x| x < &range_start);
+        let right_index = self.left.partition_point(|x| x <= &(range_end + 1));
 
         // Get all the range bounds that are covered
         let left_slice = &self.left[left_index..right_index];
