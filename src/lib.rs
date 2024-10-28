@@ -206,14 +206,15 @@ impl AsyncHttpRangeReader {
         let client = client.into();
 
         // Get the size of the file from this initial request
-        let content_range = ContentRange::parse(
-            tail_request_response
-                .headers()
-                .get(reqwest::header::CONTENT_RANGE)
-                .ok_or(AsyncHttpRangeReaderError::ContentRangeMissing)?
-                .to_str()
-                .map_err(|_err| AsyncHttpRangeReaderError::ContentRangeMissing)?,
-        );
+        let content_range_header = tail_request_response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .ok_or(AsyncHttpRangeReaderError::ContentRangeMissing)?
+            .to_str()
+            .map_err(|_err| AsyncHttpRangeReaderError::ContentRangeMissing)?;
+        let content_range = ContentRange::parse(content_range_header).ok_or_else(|| {
+            AsyncHttpRangeReaderError::ContentRangeParser(content_range_header.to_string())
+        })?;
         let (start, finish, complete_length) = match content_range {
             ContentRange::Bytes(ContentRangeBytes {
                 first_byte,

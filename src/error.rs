@@ -30,6 +30,10 @@ pub enum AsyncHttpRangeReaderError {
     /// Memory mapping the file failed
     #[error("memory mapping the file failed")]
     MemoryMapError(#[source] Arc<std::io::Error>),
+
+    /// Error from `http-content-range`
+    #[error("Invalid Content-Range header: {0}")]
+    ContentRangeParser(String),
 }
 
 impl From<std::io::Error> for AsyncHttpRangeReaderError {
