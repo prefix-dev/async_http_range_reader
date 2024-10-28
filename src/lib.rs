@@ -663,7 +663,6 @@ mod test {
     use rstest::*;
     use std::path::Path;
     use tokio::io::AsyncReadExt as _;
-    use tokio_util::compat::TokioAsyncReadCompatExt;
 
     #[rstest]
     #[case(CheckSupportMethod::Head)]
@@ -703,14 +702,16 @@ mod test {
 
         assert_eq!(range.len(), file_size);
 
-        let mut reader = ZipFileReader::new(range.compat()).await.unwrap();
+        let mut reader = ZipFileReader::with_tokio(tokio::io::BufReader::with_capacity(0, range))
+            .await
+            .unwrap();
 
         assert_eq!(
             reader
                 .file()
                 .entries()
                 .iter()
-                .map(|e| e.entry().filename().as_str().unwrap_or(""))
+                .map(|e| e.filename().as_str().unwrap_or(""))
                 .collect::<Vec<_>>(),
             vec![
                 "metadata.json",
@@ -720,7 +721,12 @@ mod test {
         );
 
         // Get the number of performed requests so far
-        let request_ranges = reader.inner_mut().get_mut().requested_ranges().await;
+        let request_ranges = reader
+            .inner_mut()
+            .get_mut()
+            .get_mut()
+            .requested_ranges()
+            .await;
         assert_eq!(request_ranges.len(), 1);
         assert_eq!(
             request_ranges[0].end - request_ranges[0].start,
@@ -737,8 +743,7 @@ mod test {
         let offset = entry.header_offset();
         // Get the size of the entry plus the header + size of the filename. We should also actually
         // include bytes for the extra fields but we don't have that information.
-        let size =
-            entry.entry().compressed_size() + 30 + entry.entry().filename().as_bytes().len() as u64;
+        let size = entry.compressed_size() + 30 + entry.filename().as_bytes().len() as u64;
 
         // The zip archive uses as BufReader which reads in chunks of 8192. To ensure we prefetch
         // enough data we round the size up to the nearest multiple of the buffer size.
@@ -748,6 +753,7 @@ mod test {
         // Fetch the bytes from the zip archive that contain the requested file.
         reader
             .inner_mut()
+            .get_mut()
             .get_mut()
             .prefetch(offset..offset + size as u64)
             .await;
@@ -763,7 +769,12 @@ mod test {
             .unwrap();
 
         // Get the number of performed requests
-        let request_ranges = reader.inner_mut().get_mut().requested_ranges().await;
+        let request_ranges = reader
+            .inner_mut()
+            .get_mut()
+            .get_mut()
+            .requested_ranges()
+            .await;
 
         assert_eq!(contents, r#"{"conda_pkg_format_version": 2}"#);
         assert_eq!(request_ranges.len(), 2);
