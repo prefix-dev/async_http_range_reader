@@ -26,7 +26,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Response, Url};
 use sparse_range::SparseRange;
 use std::{
-    io::{self, ErrorKind, SeekFrom},
+    io::{self, SeekFrom},
     ops::Range,
     pin::Pin,
     sync::Arc,
@@ -476,7 +476,7 @@ async fn run_streamer(
                 .instrument(span)
                 .await
                 .and_then(error_for_status)
-                .map_err(|e| std::io::Error::new(ErrorKind::Other, e))
+                .map_err(std::io::Error::other)
             {
                 Err(e) => {
                     state.error = Some(e.into());
@@ -585,7 +585,7 @@ impl AsyncRead for AsyncHttpRangeReader {
 
         // If a previous error occurred we return that.
         if let Some(e) = inner.streamer_state.error.as_ref() {
-            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e.clone())));
+            return Poll::Ready(Err(io::Error::other(e.clone())));
         }
 
         // Determine the range to be fetched
@@ -641,7 +641,7 @@ impl AsyncRead for AsyncHttpRangeReader {
                 Some(state) => {
                     inner.streamer_state = state;
                     if let Some(e) = inner.streamer_state.error.as_ref() {
-                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e.clone())));
+                        return Poll::Ready(Err(io::Error::other(e.clone())));
                     }
                 }
             }
