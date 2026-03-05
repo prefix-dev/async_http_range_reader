@@ -39,7 +39,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::WatchStream;
 use tokio_util::sync::PollSender;
-use tracing::{info_span, Instrument};
+use tracing::{debug, info_span, Instrument};
 
 pub use error::AsyncHttpRangeReaderError;
 
@@ -180,12 +180,11 @@ impl AsyncHttpRangeReader {
         extra_headers: HeaderMap,
     ) -> Result<Response, AsyncHttpRangeReaderError> {
         let client = client.into();
+        let range = format!("bytes=-{initial_chunk_size}");
+        debug!(%url, %range, "sending initial tail request");
         let tail_response = client
             .get(url)
-            .header(
-                reqwest::header::RANGE,
-                format!("bytes=-{initial_chunk_size}"),
-            )
+            .header(reqwest::header::RANGE, range)
             .headers(extra_headers)
             .send()
             .await
@@ -286,6 +285,7 @@ impl AsyncHttpRangeReader {
         let client = client.into();
 
         // Perform a HEAD request to get the content-length.
+        debug!(%url, "sending initial HEAD request");
         let head_response = client
             .head(url.clone())
             .headers(extra_headers)
@@ -467,6 +467,7 @@ async fn run_streamer(
 
             // Execute the request
             let range_string = format!("bytes={}-{}", range.start(), range.end());
+            debug!(%url, range = range_string.as_str(), "fetching range");
             let span = info_span!("fetch_range", range = range_string.as_str());
             let response = match client
                 .get(url.clone())
