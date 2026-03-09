@@ -189,7 +189,14 @@ impl AsyncHttpRangeReader {
             .headers(extra_headers)
             .send()
             .await
-            .and_then(error_for_status)
+            .map_err(Arc::new)
+            .map_err(AsyncHttpRangeReaderError::HttpError)?;
+
+        if tail_response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return Err(AsyncHttpRangeReaderError::HttpRangeRequestUnsupported);
+        }
+
+        let tail_response = error_for_status(tail_response)
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::HttpError)?;
         Ok(tail_response)
@@ -655,6 +662,11 @@ mod static_directory_server;
 #[cfg(test)]
 mod test {
     use super::*;
+    use axum::{
+        http::{HeaderMap as AxumHeaderMap, StatusCode as AxumStatusCode},
+        routing::get,
+        Router,
+    };
     use crate::static_directory_server::StaticDirectoryServer;
     use assert_matches::assert_matches;
     use async_zip::tokio::read::seek::ZipFileReader;
@@ -853,5 +865,34 @@ mod test {
         assert_matches!(
             err, AsyncHttpRangeReaderError::HttpError(err) if err.status() == Some(StatusCode::NOT_FOUND)
         );
+    }
+
+    #[tokio::test]
+    async fn test_negative_range_416_is_unsupported() {
+        async fn handler(headers: AxumHeaderMap) -> AxumStatusCode {
+            if headers.contains_key(reqwest::header::RANGE) {
+                AxumStatusCode::RANGE_NOT_SATISFIABLE
+            } else {
+                AxumStatusCode::OK
+            }
+        }
+
+        let app = Router::new().route("/", get(handler));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let err = AsyncHttpRangeReader::new(
+            Client::new(),
+            Url::parse(&format!("http://127.0.0.1:{}/", addr.port())).unwrap(),
+            CheckSupportMethod::NegativeRangeRequest(8192),
+            HeaderMap::default(),
+        )
+        .await
+        .expect_err("expected an unsupported range request error");
+
+        assert_matches!(err, AsyncHttpRangeReaderError::HttpRangeRequestUnsupported);
     }
 }
