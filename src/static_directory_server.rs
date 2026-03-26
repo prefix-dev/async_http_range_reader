@@ -1,4 +1,3 @@
-use axum::routing::get_service;
 use reqwest::Url;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -22,10 +21,8 @@ impl StaticDirectoryServer {
 
 impl StaticDirectoryServer {
     pub async fn new(path: impl AsRef<Path>) -> Result<Self, StaticDirectoryServerError> {
-        let service = get_service(ServeDir::new(path));
-
         // Create a router that will serve the static files
-        let app = axum::Router::new().nest_service("/", service);
+        let app = axum::Router::new().fallback_service(ServeDir::new(path));
 
         // Construct the server that will listen on localhost but with a *random port*. The random
         // port is very important because it enables creating multiple instances at the same time.
