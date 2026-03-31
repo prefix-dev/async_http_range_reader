@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 /// Error type used for [`crate::AsyncHttpRangeReader`]
 #[derive(Clone, Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AsyncHttpRangeReaderError {
     /// The server does not support range requests
     #[error("range requests are not supported")]
