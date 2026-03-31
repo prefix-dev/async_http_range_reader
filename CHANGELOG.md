@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/prefix-dev/async_http_range_reader/compare/v0.9.1...v0.10.0) - 2026-03-31
+
+### Fixed
+
+- Avoid panics when content is longer than content length header ([#33](https://github.com/prefix-dev/async_http_range_reader/pull/33))
+
+### Other
+
+- migrate off bisect ([#34](https://github.com/prefix-dev/async_http_range_reader/pull/34))
+- Use `std::io::Error::other(_)` and declare MSRV 1.74 ([#25](https://github.com/prefix-dev/async_http_range_reader/pull/25))
+- Fix new clippy lints ([#27](https://github.com/prefix-dev/async_http_range_reader/pull/27))
+
 ## [0.9.1](https://github.com/prefix-dev/async_http_range_reader/compare/v0.9.0...v0.9.1) - 2024-11-12
 
 ### Other
