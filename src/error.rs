@@ -32,6 +32,10 @@ pub enum AsyncHttpRangeReaderError {
     #[error("memory mapping the file failed")]
     MemoryMapError(#[source] Arc<std::io::Error>),
 
+    /// An internal lock was poisoned by a panic
+    #[error("memory map lock poisoned")]
+    LockPoisoned,
+
     /// Error from `http-content-range`
     #[error("invalid Content-Range header: {0}")]
     ContentRangeParser(String),

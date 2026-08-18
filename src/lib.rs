@@ -29,7 +29,7 @@ use std::{
     io::{self, SeekFrom},
     ops::Range,
     pin::Pin,
-    sync::Arc,
+    sync::{self, Arc},
     task::{ready, Context, Poll},
 };
 use tokio::{
@@ -90,11 +90,30 @@ struct StreamerState {
     error: Option<AsyncHttpRangeReaderError>,
 }
 
+/// A mapping owned by both the reader and its background download task.
+///
+/// The lock is held only while copying bytes. No reference to the mapping escapes a guard, so
+/// downloads can write new ranges without aliasing a long-lived shared slice.
+#[derive(Debug)]
+struct SharedMemoryMap {
+    data: sync::Mutex<MmapMut>,
+    len: usize,
+}
+
+impl SharedMemoryMap {
+    fn new(data: MmapMut) -> Self {
+        Self {
+            len: data.len(),
+            data: sync::Mutex::new(data),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
-    /// A read-only view on the memory mapped data. The `downloaded_range` indicates the regions of
+    /// A shared view on the memory mapped data. The `downloaded_range` indicates the regions of
     /// memory that contain bytes that have been downloaded.
-    data: &'static [u8],
+    data: Arc<SharedMemoryMap>,
 
     /// The current read position in the stream
     pos: u64,
@@ -249,10 +268,7 @@ impl AsyncHttpRangeReader {
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::MemoryMapError)?;
 
-        // SAFETY: Get a read-only slice to the memory. This is safe because the memory map is never
-        // reallocated and we keep track of the initialized part.
-        let memory_map_slice =
-            unsafe { std::slice::from_raw_parts(memory_map.as_ptr(), memory_map.len()) };
+        let memory_map = Arc::new(SharedMemoryMap::new(memory_map));
 
         let requested_range = SparseRange::from_range(start..end_inclusive + 1);
 
@@ -267,7 +283,7 @@ impl AsyncHttpRangeReader {
             url,
             extra_headers,
             Some((response, start, end_inclusive + 1)),
-            memory_map,
+            Arc::clone(&memory_map),
             state_tx,
             request_rx,
         ));
@@ -279,9 +295,9 @@ impl AsyncHttpRangeReader {
             .push(start..end_inclusive + 1);
 
         let reader = Self {
-            len: memory_map_slice.len() as u64,
+            len: memory_map.len as u64,
             inner: Mutex::new(Inner {
-                data: memory_map_slice,
+                data: memory_map,
                 pos: 0,
                 requested_range,
                 streamer_state,
@@ -355,10 +371,7 @@ impl AsyncHttpRangeReader {
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::MemoryMapError)?;
 
-        // SAFETY: Get a read-only slice to the memory. This is safe because the memory map is never
-        // reallocated and we keep track of the initialized part.
-        let memory_map_slice =
-            unsafe { std::slice::from_raw_parts(memory_map.as_ptr(), memory_map.len()) };
+        let memory_map = Arc::new(SharedMemoryMap::new(memory_map));
 
         let requested_range = SparseRange::default();
 
@@ -373,7 +386,7 @@ impl AsyncHttpRangeReader {
             url,
             extra_headers,
             None,
-            memory_map,
+            Arc::clone(&memory_map),
             state_tx,
             request_rx,
         ));
@@ -382,9 +395,9 @@ impl AsyncHttpRangeReader {
         let streamer_state = StreamerState::default();
 
         let reader = Self {
-            len: memory_map_slice.len() as u64,
+            len: memory_map.len as u64,
             inner: Mutex::new(Inner {
-                data: memory_map_slice,
+                data: memory_map,
                 pos: 0,
                 requested_range,
                 streamer_state,
@@ -411,7 +424,7 @@ impl AsyncHttpRangeReader {
         let inner = self.inner.get_mut();
 
         // Ensure the range is withing the file size and non-zero of length.
-        let range = bytes.start..(bytes.end.min(inner.data.len() as u64));
+        let range = bytes.start..(bytes.end.min(inner.data.len as u64));
         if range.start >= range.end {
             return;
         }
@@ -439,7 +452,7 @@ async fn run_streamer(
     url: Url,
     extra_headers: HeaderMap,
     response: Option<(Response, u64, u64)>,
-    mut memory_map: MmapMut,
+    memory_map: Arc<SharedMemoryMap>,
     mut state_tx: Sender<StreamerState>,
     mut request_rx: tokio::sync::mpsc::Receiver<Range<u64>>,
 ) {
@@ -454,7 +467,7 @@ async fn run_streamer(
             response,
             start,
             end_exclusive,
-            &mut memory_map,
+            &memory_map,
             &mut state_tx,
             &mut state,
         )
@@ -508,7 +521,7 @@ async fn run_streamer(
             };
 
             if let Err(err) =
-                validate_content_range(&response, *range.start(), *range.end(), memory_map.len())
+                validate_content_range(&response, *range.start(), *range.end(), memory_map.len)
             {
                 state.error = Some(err);
                 let _ = state_tx.send(state);
@@ -527,7 +540,7 @@ async fn run_streamer(
                 response,
                 *range.start(),
                 *range.end() + 1,
-                &mut memory_map,
+                &memory_map,
                 &mut state_tx,
                 &mut state,
             )
@@ -589,16 +602,16 @@ async fn stream_response(
     tail_request_response: Response,
     start: u64,
     end_exclusive: u64,
-    memory_map: &mut MmapMut,
+    memory_map: &SharedMemoryMap,
     state_tx: &mut Sender<StreamerState>,
     state: &mut StreamerState,
 ) -> bool {
     // Enforce request channel contract
     assert!(
-        end_exclusive <= memory_map.len() as u64,
+        end_exclusive <= memory_map.len as u64,
         "end is outside of memory map {} > {}",
         end_exclusive,
-        memory_map.len()
+        memory_map.len
     );
 
     let mut offset = start;
@@ -629,8 +642,18 @@ async fn stream_response(
         }
 
         // Copy the data from the stream to memory
-        memory_map[byte_range.start as usize..byte_range.end as usize]
-            .copy_from_slice(bytes.as_ref());
+        {
+            let mut data = match memory_map.data.lock() {
+                Ok(data) => data,
+                Err(_) => {
+                    state.error = Some(AsyncHttpRangeReaderError::LockPoisoned);
+                    let _ = state_tx.send(state.clone());
+                    return false;
+                }
+            };
+            data[byte_range.start as usize..byte_range.end as usize]
+                .copy_from_slice(bytes.as_ref());
+        }
 
         // Update the range of bytes that have been downloaded
         state.resident_range.update(byte_range);
@@ -663,7 +686,7 @@ impl AsyncSeek for AsyncHttpRangeReader {
 
         inner.pos = match position {
             SeekFrom::Start(pos) => pos,
-            SeekFrom::End(relative) => (inner.data.len() as i64).saturating_add(relative) as u64,
+            SeekFrom::End(relative) => (inner.data.len as i64).saturating_add(relative) as u64,
             SeekFrom::Current(relative) => (inner.pos as i64).saturating_add(relative) as u64,
         };
 
@@ -691,7 +714,7 @@ impl AsyncRead for AsyncHttpRangeReader {
         }
 
         // Determine the range to be fetched
-        let range = inner.pos..(inner.pos + buf.remaining() as u64).min(inner.data.len() as u64);
+        let range = inner.pos..(inner.pos + buf.remaining() as u64).min(inner.data.len as u64);
         if range.start >= range.end {
             return Poll::Ready(Ok(()));
         }
@@ -730,8 +753,14 @@ impl AsyncRead for AsyncHttpRangeReader {
                 .is_covered(range.clone())
             {
                 let len = (range.end - range.start) as usize;
-                buf.initialize_unfilled_to(len)
-                    .copy_from_slice(&inner.data[range.start as usize..range.end as usize]);
+                {
+                    let data =
+                        inner.data.data.lock().map_err(|_| {
+                            io::Error::other(AsyncHttpRangeReaderError::LockPoisoned)
+                        })?;
+                    buf.initialize_unfilled_to(len)
+                        .copy_from_slice(&data[range.start as usize..range.end as usize]);
+                }
                 buf.advance(len);
                 inner.pos += len as u64;
                 return Poll::Ready(Ok(()));
@@ -757,6 +786,9 @@ impl AsyncRead for AsyncHttpRangeReader {
 
 #[cfg(test)]
 mod static_directory_server;
+
+#[cfg(test)]
+mod lifetime_tests;
 
 #[cfg(test)]
 mod test {
