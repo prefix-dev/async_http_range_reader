@@ -729,7 +729,11 @@ impl AsyncRead for AsyncHttpRangeReader {
 
             // Otherwise wait for new data to come in
             match ready!(Pin::new(&mut inner.streamer_state_rx).poll_next(cx)) {
-                None => unreachable!(),
+                None => {
+                    let error = AsyncHttpRangeReaderError::DownloadTaskStopped;
+                    inner.streamer_state.error = Some(error.clone());
+                    return Poll::Ready(Err(io::Error::other(error)));
+                }
                 Some(state) => {
                     inner.streamer_state = state;
                     if let Some(e) = inner.streamer_state.error.as_ref() {
@@ -759,7 +763,57 @@ mod test {
     use reqwest::{Client, StatusCode};
     use rstest::*;
     use std::path::Path;
+    use std::time::Duration;
     use tokio::io::AsyncReadExt as _;
+
+    #[tokio::test]
+    async fn closed_download_stream_returns_terminal_error() {
+        let response = axum::http::Response::builder()
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_LENGTH, "4")
+            .body("")
+            .unwrap();
+        let mut reader = AsyncHttpRangeReader::from_head_response(
+            Client::builder().no_proxy().build().unwrap(),
+            response.into(),
+            Url::parse("http://localhost/file").unwrap(),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+
+        let (state_tx, state_rx) = watch::channel(StreamerState::default());
+        drop(state_tx);
+        let inner = reader.inner.get_mut();
+        inner.streamer_state_rx = WatchStream::new(state_rx);
+        // Treat the range as requested so the read does not issue an HTTP request.
+        inner.requested_range = SparseRange::from_range(0..4);
+
+        let mut contents = [0; 4];
+        let error = tokio::time::timeout(Duration::from_secs(5), reader.read_exact(&mut contents))
+            .await
+            .unwrap()
+            .expect_err("a closed download stream must not leave a read pending");
+        assert_matches!(
+            error
+                .get_ref()
+                .and_then(|error| error.downcast_ref::<AsyncHttpRangeReaderError>()),
+            Some(AsyncHttpRangeReaderError::DownloadTaskStopped)
+        );
+
+        // A cached read must still return the recorded error.
+        reader
+            .inner
+            .get_mut()
+            .streamer_state
+            .resident_range
+            .update(0..4);
+        let repeated_error = reader
+            .read_exact(&mut contents)
+            .await
+            .expect_err("the terminal error must be retained");
+        assert_eq!(repeated_error.to_string(), error.to_string());
+    }
 
     #[rstest]
     #[case(CheckSupportMethod::Head)]

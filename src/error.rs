@@ -58,6 +58,10 @@ pub enum AsyncHttpRangeReaderError {
     /// The server returned fewer bytes than the range request asked for
     #[error("expected {expected} bytes from range response, got {actual}")]
     ResponseTooShort { expected: u64, actual: u64 },
+
+    /// The download task stopped before completing the requested range
+    #[error("range download task stopped before completing the requested range")]
+    DownloadTaskStopped,
 }
 
 impl From<std::io::Error> for AsyncHttpRangeReaderError {
