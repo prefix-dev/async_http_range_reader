@@ -238,9 +238,14 @@ impl AsyncHttpRangeReader {
         };
 
         // Allocate a memory map to hold the data
-        let memory_map = memmap2::MmapOptions::new()
-            .len(complete_length as usize)
-            .map_anon()
+        let memory_map = usize::try_from(complete_length)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("file length of {complete_length} bytes cannot be represented on this platform"),
+                )
+            })
+            .and_then(MmapMut::map_anon)
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::MemoryMapError)?;
 
@@ -339,9 +344,14 @@ impl AsyncHttpRangeReader {
             .map_err(|_err| AsyncHttpRangeReaderError::ContentLengthMissing)?;
 
         // Allocate a memory map to hold the data
-        let memory_map = memmap2::MmapOptions::new()
-            .len(content_length as _)
-            .map_anon()
+        let memory_map = usize::try_from(content_length)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("file length of {content_length} bytes cannot be represented on this platform"),
+                )
+            })
+            .and_then(MmapMut::map_anon)
             .map_err(Arc::new)
             .map_err(AsyncHttpRangeReaderError::MemoryMapError)?;
 
@@ -585,7 +595,7 @@ async fn stream_response(
 ) -> bool {
     // Enforce request channel contract
     assert!(
-        (end_exclusive as usize) <= memory_map.len(),
+        end_exclusive <= memory_map.len() as u64,
         "end is outside of memory map {} > {}",
         end_exclusive,
         memory_map.len()
@@ -1004,6 +1014,50 @@ mod test {
         assert_matches!(
             err, AsyncHttpRangeReaderError::HttpError(err) if err.status() == Some(StatusCode::NOT_FOUND)
         );
+    }
+
+    #[rstest]
+    #[case(CheckSupportMethod::Head)]
+    #[case(CheckSupportMethod::NegativeRangeRequest(1))]
+    #[tokio::test]
+    async fn test_file_length_too_large(
+        #[case] check_method: CheckSupportMethod,
+        #[values(1_u64 << 63, (1_u64 << 63) + 1)] length: u64,
+    ) {
+        // Neither length can be mapped on any platform.
+        let response = axum::http::Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_LENGTH, length)
+            .header(header::CONTENT_RANGE, format!("bytes 0-0/{length}"))
+            .body("")
+            .unwrap()
+            .into();
+        let client = Client::new();
+        let url = Url::parse("http://localhost/file").unwrap();
+        let err = match check_method {
+            CheckSupportMethod::Head => {
+                AsyncHttpRangeReader::from_head_response(
+                    client,
+                    response,
+                    url,
+                    HeaderMap::default(),
+                )
+                .await
+            }
+            CheckSupportMethod::NegativeRangeRequest(_) => {
+                AsyncHttpRangeReader::from_range_response(
+                    client,
+                    response,
+                    url,
+                    HeaderMap::default(),
+                )
+                .await
+            }
+        }
+        .unwrap_err();
+
+        assert_matches!(err, AsyncHttpRangeReaderError::MemoryMapError(_));
     }
 
     /// Spawn a server where the HEAD response reports `head_size` bytes, and range requests always
