@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/prefix-dev/async_http_range_reader/compare/v0.11.0...v0.12.0) - 2026-09-03
+
+### Fixed
+
+- Declare error type as non_exhaustive ([#13](https://github.com/prefix-dev/async_http_range_reader/pull/13))
+
+### Other
+
+- pin release-plz action to a commit with cargo-semver-checks 0.50
+- Fix clippy
+- Keep cached ranges alive after the download task stops
+- reject file lengths that do not fit in usize
+- Return a terminal error when range downloads stop
+
 ## [0.11.0](https://github.com/prefix-dev/async_http_range_reader/compare/v0.10.0...v0.11.0) - 2026-08-06
 
 ### Other
