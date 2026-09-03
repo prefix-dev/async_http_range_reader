@@ -21,7 +21,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@v0.5
+        # Pinned to `main` instead of `v0.5`: the last tagged release (v0.5.131) installs
+        # cargo-semver-checks 0.48, which cannot read the rustdoc JSON emitted by current stable
+        # Rust. release-plz then reports the resulting tool error as "API compatible"
+        # (https://github.com/release-plz/release-plz/issues/2294), silently producing a patch
+        # bump for breaking changes. Switch back to `@v0.5` once a release with
+        # cargo-semver-checks >= 0.50 is tagged.
+        uses: release-plz/action@d44660f6800b7af45498a8ae8a23a95524497290 # main, 2026-09-02, cargo-semver-checks 0.50
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
